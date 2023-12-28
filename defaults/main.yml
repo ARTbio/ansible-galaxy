@@ -23,6 +23,10 @@ galaxy_manage_gravity: "{{ false if __galaxy_major_version is version('22.05', '
 galaxy_manage_systemd: no # For Galaxy
 galaxy_manage_systemd_reports: no # For Reports
 galaxy_manage_cleanup: no
+galaxy_manage_themes: no
+galaxy_manage_subdomain_static: no
+galaxy_manage_host_filters: no
+galaxy_auto_brand: no # automatically sets the subdomain name as brand
 
 
 # Control whether to output verbose task diffs (e.g. when performing a git update) when running Ansible with --diff.
@@ -107,12 +111,18 @@ galaxy_dirs:
   - "{{ galaxy_tool_data_path }}"
   - "{{ galaxy_log_dir }}"
 
+# Additional directories to create as the Galaxy user, so you don't have to copy the default galaxy_dirs
+galaxy_extra_dirs: []
+
 # Directories to create as the privilege separated user if galaxy_manage_paths is enabled
 galaxy_privsep_dirs:
   - "{{ galaxy_venv_dir }}"
   - "{{ galaxy_server_dir }}"
   - "{{ galaxy_config_dir }}"
   - "{{ galaxy_local_tools_dir }}"
+
+# Additional directories to create as the privilege separated user, so you don't have to copy the default galaxy_dirs
+galaxy_extra_privsep_dirs: []
 
 # Local (relative to playbook) path to local tools
 galaxy_local_tools_src_dir: files/galaxy/tools
@@ -182,7 +192,7 @@ _galaxy_tmpclean_command:
 
 galaxy_tmpclean_verbose_statement: "{{ galaxy_tmpclean_verbose | ternary(' -v', '') }}"
 galaxy_tmpclean_log_statement: >-
-  {{ (galaxy_tmpclean_log is not true) | ternary(
+  {{ (galaxy_tmpclean_log != true) | ternary(
       ((galaxy_tmpclean_log is none) | ternary(
           '>/dev/null',
           '>>' ~ galaxy_tmpclean_log
@@ -246,6 +256,7 @@ galaxy_app_config_section: "{{ 'galaxy' if galaxy_config_style in ('yaml', 'yml'
 
 # Galaxy configuration files will be written with these permissions (mode argument to Ansible copy/template module)
 galaxy_config_perms: 0640
+galaxy_config_perms_public: 0644
 
 # The default Galaxy configuration, ensures that Galaxy can find all of the configs if galaxy_config_dir !=
 # galaxy_server_dir
@@ -288,6 +299,64 @@ galaxy_app_config_default:
   # Everything else
   visualization_plugins_directory: "config/plugins/visualizations"
 
+  # Static and themes configuration, will only be added if galaxy_manage_themes
+  static_enabled: "{{ galaxy_manage_subdomain_static }}"
+  static_dir_by_host: >
+    { {% if galaxy_manage_subdomain_static %}
+    '{{ galaxy_themes_instance_domain }}': '{{ galaxy_themes_static_path }}/static/',
+    {% for subdomain in galaxy_themes_subdomains %}
+    '{{ subdomain.name }}.{{ galaxy_themes_instance_domain}}': '{{ galaxy_themes_static_path }}/static-{{ subdomain.name }}/',
+    {% endfor %}
+    {% endif %} }
+  static_images_dir_by_host: >
+    { {% if galaxy_manage_subdomain_static %}
+    '{{ galaxy_themes_instance_domain }}': '{{ galaxy_themes_static_path }}/static/images',
+    {% for subdomain in galaxy_themes_subdomains %}
+    '{{ subdomain.name }}.{{ galaxy_themes_instance_domain}}': '{{ galaxy_themes_static_path }}/static-{{ subdomain.name }}/images',
+    {% endfor %}
+    {% endif %} }
+  static_welcome_html_by_host: >
+    { {% if galaxy_manage_subdomain_static %}
+    '{{ galaxy_themes_instance_domain }}': '{{ galaxy_themes_static_path }}/static/welcome.html',
+    {% for subdomain in galaxy_themes_subdomains %}
+    '{{ subdomain.name }}.{{ galaxy_themes_instance_domain}}': '{{ galaxy_themes_static_path }}/static-{{ subdomain.name }}/welcome.html',
+    {% endfor %}
+    {% endif %} }
+  static_scripts_dir_by_host: >
+    { {% if galaxy_manage_subdomain_static %}
+    '{{ galaxy_themes_instance_domain }}': '{{ galaxy_themes_static_path }}/static/scripts',
+    {% for subdomain in galaxy_themes_subdomains %}
+    '{{ subdomain.name }}.{{ galaxy_themes_instance_domain}}': '{{ galaxy_themes_static_path }}/static-{{ subdomain.name }}/scripts',
+    {% endfor %}
+    {% endif %} }
+  static_favicon_dir_by_host: >
+    { {% if galaxy_manage_subdomain_static %}
+    '{{ galaxy_themes_instance_domain }}': '{{ galaxy_themes_static_path }}/static',
+    {% for subdomain in galaxy_themes_subdomains %}
+    '{{ subdomain.name }}.{{ galaxy_themes_instance_domain}}': '{{ galaxy_themes_static_path }}/static-{{ subdomain.name }}',
+    {% endfor %}
+    {% endif %} }
+  static_robots_txt_by_host: >
+    { {% if galaxy_manage_subdomain_static %}
+    '{{ galaxy_themes_instance_domain }}': '{{ galaxy_themes_static_path }}/static',
+    {% for subdomain in galaxy_themes_subdomains %}
+    '{{ subdomain.name }}.{{ galaxy_themes_instance_domain}}': '{{ galaxy_themes_static_path }}/static-{{ subdomain.name }}',
+    {% endfor %}
+    {% endif %} }
+  themes_config_file_by_host: >
+    { {% if galaxy_manage_themes %}
+    '{{ galaxy_themes_instance_domain }}': '{{ galaxy_themes_conf_file_name }}',
+    {% for subdomain in galaxy_themes_subdomains %}
+    '{{ subdomain.name  }}.{{ galaxy_themes_instance_domain}}': '{{ subdomain.name }}.yml',
+    {% endfor %}
+    {% endif %} }
+  brand_by_host: >
+    { {% if galaxy_auto_brand %}
+    '{{ galaxy_themes_instance_domain }}': '{{ galaxy_themes_instance_domain }}',
+    {% for subdomain in galaxy_themes_subdomains %}
+    '{{ subdomain.name  }}.{{ galaxy_themes_instance_domain}}': '{{ subdomain.name[0]|upper }}{{ subdomain.name[1:] }}',
+    {% endfor %}
+    {% endif %} }
 # Need to set galaxy_config_default[galaxy_app_config_section] dynamically but Ansible/Jinja2 does not make this easy
 galaxy_config_default: "{{ {} | combine({galaxy_app_config_section: galaxy_app_config_default}) }}"
 galaxy_config_merged: "{{ galaxy_config_default | combine(galaxy_config | default({}), recursive=True) }}"
@@ -313,6 +382,8 @@ galaxy_errordocs_prefix: /error
 # templates to be installed on the managed host.
 galaxy_config_files: []
 galaxy_config_templates: []
+# Like above, except with world readable permissions
+galaxy_config_files_public: []
 
 # Default Gravity configuration
 galaxy_gravity_state_dir: "{{ (galaxy_mutable_data_dir, 'gravity') | path_join }}"
@@ -358,6 +429,9 @@ galaxy_uwsgi_config_default:
 # build separately, but this is not guaranteed to work for all version of Galaxy - using `make` is the safer choice.
 galaxy_client_make_target: client-production-maps
 
+# Build the client even if it is not out of date
+galaxy_client_force_build: false
+
 # If galaxy_client_make_target is null, you can set this to `development` to build the client for development
 galaxy_client_node_env: production
 galaxy_client_build_steps:
@@ -369,9 +443,20 @@ galaxy_client_build_steps:
     - stageLibs
     - plugins
 
+__galaxy_node_version_max:
+  "redhat7": "16.19.1"
+galaxy_node_version_max: >-
+  {{
+    (__galaxy_node_version_max[(ansible_os_family | lower) ~ ansible_distribution_major_version]) | default(galaxy_node_version)
+  }}
+
 #
 # systemd options
 #
+
+__galaxy_gravity_pm: "{{ (galaxy_config_merged.gravity | default({})).process_manager | default('supervisor') }}"
+__galaxy_gravity_instance_name: "{{ (galaxy_config_merged.gravity | default({})).instance_name | default(none) }}"
+galaxy_gravity_wrapper_path: "/usr/local/bin/galaxyctl{{ __galaxy_gravity_instance_name | ternary('-' ~ __galaxy_gravity_instance_name, '') }}"
 
 # Currently `mule` (aka uWSGI) and `gravity` (runs Galaxy 22.01+ under gunicorn) are supported
 galaxy_systemd_mode: "{{ 'mule' if __galaxy_major_version is version('22.05', '<') else 'gravity' }}"
@@ -405,3 +490,67 @@ galaxy_systemd_env: []
 
 # A list of additional python packages to install into galaxy's virtual environment
 galaxy_additional_venv_packages: []
+
+# galaxy themes variables
+galaxy_themes_subdomains: {}
+# - name: assembly
+#   tool_sections:
+#     - "hicexplorer"
+#     - "graph_display_data"
+#     - "peak_calling"
+#     - "assembly"
+#     - "annotation"
+#     - "genome_diversity"
+#     - "multiple_alignments"
+#   extra_tool_labels:
+#     - "proteomics"
+galaxy_themes_conf_file_name: "{{ galaxy_themes_conf_path | basename }}"
+galaxy_themes_static_keys:
+  static_dir: ""
+  static_images_dir: "images/"
+  static_scripts_dir: "scripts/"
+  static_welcome_html: "welcome.html/"
+  static_favicon_dir: "favicon.ico"
+  static_robots_txt: "robots.txt"
+galaxy_themes_conf_path: files/galaxy/config/themes_conf.yml
+galaxy_themes_static_path: "{{ galaxy_root }}/server"
+galaxy_themes_static_dir: "{{ galaxy_root }}/server/static"
+galaxy_themes_symlinks: true
+galaxy_themes_symlinks_no_log: false # Hides extended logs for the symlink task in static/dist
+galaxy_themes_welcome_url_prefix: https://usegalaxy-eu.github.io/index-
+galaxy_themes_default_welcome: https://galaxyproject.org
+galaxy_themes_ansible_file_path: files/galaxy/static
+galaxy_themes_instance_domain: usegalaxy.eu
+galaxy_themes_global_host_filters_path: "{{ galaxy_root }}/server/lib/galaxy/tool_util/toolbox/filters/global_host_filters.py"
+galaxy_themes_tool_base_labels:
+  - "file_and_meta_tools"
+  - "general_text_tools"
+  - "genomic_file_manipulation"
+  - "gff"
+  - "common_genomics"
+galaxy_themes_tool_ngs_labels:
+  - "specific_genomics"
+  - "genomics_toolkits"
+
+# These sections will be displayed in the tool panel for every subdomain
+galaxy_themes_tool_base_sections:
+  - "getext"
+  - "send"
+  - "collection_operations"
+  - "textutil"
+  - "convert"
+  - "filter"
+  - "group"
+  - "expression_tools"
+
+# There sections are a collection of general NGS tools and will be used in most but not all subdomains
+galaxy_themes_tool_ngs_sections:
+  - "deeptools"
+  - "bed"
+  - "sambam"
+  - "bxops"
+  - "fastafastq"
+  - "fastq_quality_control"
+  - "picard"
+  - "mapping"
+  - "sambam"
