@@ -26,6 +26,18 @@
   import_tasks: layout.yml
   tags: always
 
+- name: Build config facts for static_*_by_host variables
+  import_tasks: static-facts.yml
+  when: galaxy_manage_subdomain_static
+  tags:
+    - galaxy_manage_subdomain_static
+
+- name: Build config facts for themes_*_by_host and brand_by_host variables
+  import_tasks: themes-facts.yml
+  when: galaxy_manage_themes
+  tags:
+    - galaxy_manage_themes
+
 - name: Include user creation tasks
   include_tasks:
     file: user.yml
@@ -161,7 +173,7 @@
   tags:
     - galaxy_manage_cleanup
 
-- name: Inlcude static directory setup
+- name: Include static directory setup
   ansible.builtin.include_tasks: static_dirs.yml
   when: galaxy_manage_subdomain_static
   tags:
